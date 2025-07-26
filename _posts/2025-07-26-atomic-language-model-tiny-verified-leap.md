@@ -160,7 +160,7 @@ We've launched with several key assets:
 - **[Crane Models White Paper](https://zenodo.org/records/15775581)**: Comprehensive documentation of Uganda's sovereign AI initiative
 - **[Hacker News Discussion](https://news.ycombinator.com/item?id=)**: Original community discussion with David's detailed responses
 - **Live Web Demo**: Coming soon - play with the model directly in your browser via WebAssembly
-- **UCCB Benchmark Suite**: Coming soon at https://huggingface.co/STIAIStudio
+
 
 ---
 
