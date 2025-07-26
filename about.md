@@ -63,7 +63,7 @@ The ALM is fully open source because we believe transformative technology should
 For research collaborations, technical questions, or partnership opportunities:
 
 - **GitHub**: [atomic-lang-model](https://github.com/KatoStevenMubiru/atomic-lang-model)
-- **Lead Researcher**: David Kypuros, Enterprise Neurosystem
+- **Lead Researcher**: David Kypuros, Enterprise Neurosystem ([davidkypuros@gmail.com](mailto:davidkypuros@gmail.com))
 - **Team Coordinator**: Kato Steven Mubiru
 
 ---
