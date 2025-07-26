@@ -47,6 +47,9 @@ exclude:
   - memory/
   - claude-flow
   - target/
+  - "flow/**/*"
+  - "**/.git"
+  - ".gitmodules"
 
 # GitHub Pages settings
 github:
