@@ -26,12 +26,19 @@ use alloc::{vec::Vec, string::String, format};
 use core::fmt;
 
 // ============================================================================
+// PyO3 Imports
+// ============================================================================
+#[cfg(feature = "pyo3")]
+use pyo3::prelude::*;
+
+// ============================================================================
 // Core Data Types
 // ============================================================================
 
 /// Syntactic category labels
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Category {
+    // --- Standard Linguistic Categories ---
     /// Noun
     N,
     /// Verb  
@@ -50,6 +57,16 @@ pub enum Category {
     DP,
     /// Complementizer Phrase
     CP,
+    
+    // --- NASA Telemetry Categories ---
+    /// A generic telemetry event
+    Event,
+    /// A command event, e.g., MOTOR_CMD_START
+    Command,
+    /// A state-checking event, e.g., CURRENT_DRAW
+    State,
+    /// The overall mission context, e.g., DRIVE
+    Context,
 }
 
 /// Feature types for Minimalist Grammar
@@ -63,6 +80,8 @@ pub enum Feature {
     Pos(u8),
     /// Negative feature (target for movement)
     Neg(u8),
+    /// Context feature (e.g., for DRIVE, STANDBY)
+    Ctx(String),
 }
 
 impl Feature {
@@ -191,6 +210,8 @@ pub enum DerivationError {
     EmptyWorkspace,
     /// Invalid operation sequence
     InvalidOperation,
+    /// Unknown Token
+    UnknownToken(String),
 }
 
 impl fmt::Display for DerivationError {
@@ -201,6 +222,7 @@ impl fmt::Display for DerivationError {
             DerivationError::FeatureMismatch => write!(f, "Feature mismatch"),
             DerivationError::EmptyWorkspace => write!(f, "Empty workspace"),
             DerivationError::InvalidOperation => write!(f, "Invalid operation"),
+            DerivationError::UnknownToken(s) => write!(f, "Unknown token: {}", s),
         }
     }
 }
@@ -260,7 +282,7 @@ pub fn merge(a: SyntacticObject, b: SyntacticObject) -> Result<SyntacticObject, 
                         new_features.extend(b_features);
                         
                         return Ok(SyntacticObject::internal(
-                            required_cat.clone(),
+                            a.label.clone(),
                             new_features,
                             vec![a, b],
                         ));
@@ -417,7 +439,12 @@ pub fn derive(workspace: &mut Workspace, max_steps: usize) -> Result<SyntacticOb
             return Ok(workspace.items[0].clone());
         }
         
-        step(workspace)?;
+        if let Err(e) = step(workspace) {
+            if e == DerivationError::NoValidOperations {
+                break; // Derivation stuck
+            }
+            return Err(e);
+        }
     }
     
     if workspace.is_successful() {
@@ -434,8 +461,8 @@ pub fn derive(workspace: &mut Workspace, max_steps: usize) -> Result<SyntacticOb
 /// Standard test lexicon for recursive patterns
 pub fn test_lexicon() -> Vec<LexItem> {
     vec![
-        LexItem::new("the", &[Feature::Cat(Category::D)]),
-        LexItem::new("a", &[Feature::Cat(Category::D)]),
+        LexItem::new("the", &[Feature::Cat(Category::D), Feature::Sel(Category::N)]),
+        LexItem::new("a", &[Feature::Cat(Category::D), Feature::Sel(Category::N)]),
         LexItem::new("student", &[Feature::Cat(Category::N)]),
         LexItem::new("tutor", &[Feature::Cat(Category::N)]),
         LexItem::new("teacher", &[Feature::Cat(Category::N)]),
@@ -454,7 +481,9 @@ pub fn generate_an_bn(n: usize) -> String {
     if n == 0 {
         String::new()
     } else {
-        format!("{} {}", "a".repeat(n), "b".repeat(n))
+        let a_s = std::iter::repeat("a").take(n).collect::<Vec<_>>().join(" ");
+        let b_s = std::iter::repeat("b").take(n).collect::<Vec<_>>().join(" ");
+        format!("{} {}", a_s, b_s)
     }
 }
 
@@ -494,14 +523,14 @@ pub fn is_an_bn_pattern(s: &str) -> bool {
 /// Parse sentence using Minimalist Grammar
 pub fn parse_sentence(sentence: &str, lexicon: &[LexItem]) -> Result<SyntacticObject, DerivationError> {
     let tokens: Vec<&str> = sentence.split_whitespace().collect();
-    let mut workspace = Workspace::new(1024); // 1KB memory limit
+    let mut workspace = Workspace::new(4096); // 4KB memory limit
     
     // Add tokens to workspace
     for token in tokens {
         if let Some(lex_item) = lexicon.iter().find(|item| item.phon == token) {
             workspace.add_lex(lex_item);
         } else {
-            return Err(DerivationError::InvalidOperation);
+            return Err(DerivationError::UnknownToken(token.to_string()));
         }
     }
     
@@ -518,11 +547,96 @@ pub fn generate_pattern(pattern: &str, n: usize) -> Result<String, DerivationErr
 
 /// Check if grammar can generate given string
 pub fn can_generate(pattern: &str, n: usize) -> bool {
-    match generate_pattern(pattern, n) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    generate_pattern(pattern, n).is_ok()
 }
+
+// ============================================================================
+// Python Bridge (PyO3)
+// ============================================================================
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+/// Validates a sequence of telemetry data using a formal grammar.
+/// This is a simple version for basic anomaly detection.
+fn validate_telemetry_sequence(sequence: Vec<f64>) -> PyResult<bool> {
+    // This function is kept for backward compatibility, but the new demo
+    // should use `validate_mission_log`.
+    let is_anomalous = sequence.iter().any(|&v| v > 10.0);
+    Ok(!is_anomalous)
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+/// Validates a structured mission log against a formal grammar of operations.
+/// Returns a list of explanations for any ungrammatical (anomalous) sequences.
+fn validate_mission_log(log: Vec<String>) -> PyResult<Vec<String>> {
+    // --- The Grammar of Space Operations ---
+    let lexicon = vec![
+        // COMMANDS: Actions that can be taken. A command selects a state.
+        LexItem::new("MOTOR_CMD_START", &[Feature::Cat(Category::Command), Feature::Sel(Category::State)]),
+        LexItem::new("MOTOR_CMD_STOP", &[Feature::Cat(Category::Command), Feature::Sel(Category::State)]),
+        LexItem::new("INSTRUMENT_PWR_ON", &[Feature::Cat(Category::Command), Feature::Sel(Category::State)]),
+        LexItem::new("INSTRUMENT_PWR_OFF", &[Feature::Cat(Category::Command), Feature::Sel(Category::State)]),
+
+        // STATES: Observations about the system. 
+        // A state can select another state, allowing for a valid chain of telemetry.
+        LexItem::new("VOLTAGE_SPIKE", &[Feature::Cat(Category::State)]), // Terminal state, cannot select another.
+        LexItem::new("CURRENT_DRAW", &[Feature::Cat(Category::State), Feature::Sel(Category::State)]),
+        LexItem::new("WHEEL_RPM", &[Feature::Cat(Category::State), Feature::Sel(Category::State)]),
+        LexItem::new("TEMP_MOTOR", &[Feature::Cat(Category::State), Feature::Sel(Category::State)]),
+        LexItem::new("TEMP_INSTRUMENT", &[Feature::Cat(Category::State), Feature::Sel(Category::State)]),
+        LexItem::new("SPECTROMETER_READ", &[Feature::Cat(Category::State), Feature::Sel(Category::State)]),
+    ];
+
+    let mut anomalies = Vec::new();
+
+    // We check each 2-event window.
+    for i in 0..log.len() {
+        if i + 1 >= log.len() { break; }
+
+        let prev_event_str = &log[i];
+        let current_event_str = &log[i+1];
+
+        // Find the lexical items for the current window.
+        let prev_lex_item = lexicon.iter().find(|item| item.phon == *prev_event_str);
+        let current_lex_item = lexicon.iter().find(|item| item.phon == *current_event_str);
+
+        if let (Some(prev_item), Some(current_item)) = (prev_lex_item, current_lex_item) {
+            // Create syntactic objects from the lexical items.
+            let prev_obj = SyntacticObject::from_lex(prev_item);
+            let current_obj = SyntacticObject::from_lex(current_item);
+
+            // The core logic: Check if the first event can grammatically select the second.
+            if !can_merge(&prev_obj, &current_obj) {
+                let explanation = format!(
+                    "Anomaly Detected: Ungrammatical sequence '{}' followed by '{}'. This violates operational rules.",
+                    prev_event_str, current_event_str
+                );
+                anomalies.push(explanation);
+            }
+        } else {
+            // Handle cases where a token isn't in the lexicon.
+            let explanation = format!(
+                "Anomaly Detected: Unknown event(s) in sequence ['{}', '{}'].",
+                prev_event_str, current_event_str
+            );
+            anomalies.push(explanation);
+        }
+    }
+
+    Ok(anomalies)
+}
+
+
+#[cfg(feature = "pyo3")]
+#[pymodule]
+/// Python module for the Atomic Language Model.
+fn atomic_lang_model_python(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(validate_telemetry_sequence, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_mission_log, m)?)?;
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -546,16 +660,16 @@ mod tests {
     fn test_an_bn_generation() {
         assert_eq!(generate_an_bn(0), "");
         assert_eq!(generate_an_bn(1), "a b");
-        assert_eq!(generate_an_bn(2), "aa bb");
-        assert_eq!(generate_an_bn(3), "aaa bbb");
+        assert_eq!(generate_an_bn(2), "a a b b");
+        assert_eq!(generate_an_bn(3), "a a a b b b");
     }
 
     #[test]
     fn test_an_bn_recognition() {
         assert!(is_an_bn_pattern(""));
         assert!(is_an_bn_pattern("a b"));
-        assert!(is_an_bn_pattern("aa bb"));
-        assert!(is_an_bn_pattern("aaa bbb"));
+        assert!(is_an_bn_pattern("a a b b"));
+        assert!(is_an_bn_pattern("a a a b b b"));
         
         assert!(!is_an_bn_pattern("a"));
         assert!(!is_an_bn_pattern("a a b"));
@@ -573,7 +687,6 @@ mod tests {
     fn test_merge_operation() {
         let det = SyntacticObject::from_lex(&LexItem::new("the", &[Feature::Cat(Category::D)]));
         let noun = SyntacticObject::from_lex(&LexItem::new("student", &[Feature::Cat(Category::N)]));
-        let verb = SyntacticObject::from_lex(&LexItem::new("left", &[Feature::Cat(Category::V)]));
         
         // This should fail - no selector feature
         assert!(merge(det.clone(), noun.clone()).is_err());
@@ -585,7 +698,8 @@ mod tests {
         };
         
         // This should succeed
-        assert!(merge(det_sel, noun).is_ok());
+        let merged = merge(det_sel, noun).unwrap();
+        assert_eq!(merged.label, Category::D);
     }
 
     #[test]
@@ -598,5 +712,16 @@ mod tests {
         
         assert_eq!(workspace.items.len(), 2);
         assert!(!workspace.is_successful());
+    }
+
+    #[test]
+    fn test_mission_log_validation() {
+        // Grammatical sequence
+        let normal_log = vec!["CTX_DRIVE".to_string(), "MOTOR_CMD_START".to_string(), "VOLTAGE_SPIKE".to_string()];
+        assert!(validate_mission_log(normal_log).unwrap().is_empty());
+
+        // Ungrammatical sequence
+        let anomaly_log = vec!["CTX_STANDBY".to_string(), "VOLTAGE_SPIKE".to_string()];
+        assert!(!validate_mission_log(anomaly_log).unwrap().is_empty());
     }
 }

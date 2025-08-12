@@ -17,46 +17,28 @@ import random
 from collections import defaultdict
 from typing import List, Tuple, Dict, Optional
 
-# Probabilistic grammar rules with weights
-PG_RULES = {
+# Probabilistic grammar rules for the NASA mission log
+MISSION_RULES = {
+    # The root can be any event, but some are more likely starting points
     'S': [
-        (1.0, ['DP', 'VP']),
+        (0.8, ['STATE']),
+        (0.2, ['COMMAND']),
     ],
-    'DP': [
-        (0.7, ['D', 'NP']),
-        (0.3, ['D', 'N']),
+    # Commands are less frequent than state updates
+    'COMMAND': [
+        (0.4, ['MOTOR_CMD_START']),
+        (0.4, ['MOTOR_CMD_STOP']),
+        (0.1, ['INSTRUMENT_PWR_ON']),
+        (0.1, ['INSTRUMENT_PWR_OFF']),
     ],
-    'NP': [
-        (0.6, ['N']),
-        (0.4, ['N', 'CP']),
-    ],
-    'VP': [
-        (0.5, ['V']),
-        (0.3, ['V', 'DP']),
-        (0.2, ['V', 'VP']),
-    ],
-    'CP': [
-        (1.0, ['C', 'S']),
-    ],
-    'D': [
-        (0.7, ['the']),
-        (0.3, ['a']),
-    ],
-    'N': [
-        (0.4, ['student']),
-        (0.3, ['teacher']),
-        (0.2, ['book']),
-        (0.1, ['class']),
-    ],
-    'V': [
-        (0.4, ['left']),
-        (0.3, ['smiled']),
-        (0.2, ['praised']),
-        (0.1, ['arrived']),
-    ],
-    'C': [
-        (0.7, ['who']),
-        (0.3, ['that']),
+    # States can transition to other states or to a new command
+    'STATE': [
+        (0.25, ['CURRENT_DRAW']),
+        (0.25, ['WHEEL_RPM']),
+        (0.20, ['TEMP_MOTOR']),
+        (0.20, ['TEMP_INSTRUMENT']),
+        (0.05, ['SPECTROMETER_READ']),
+        (0.05, ['VOLTAGE_SPIKE']), # Spikes are rare
     ],
 }
 
@@ -65,8 +47,21 @@ class ProbGrammar:
     
     def __init__(self, rules: Dict[str, List[Tuple[float, List[str]]]] = None):
         """Initialize with grammar rules, normalizing probabilities."""
-        self.rules = rules or PG_RULES
+        self.rules = rules or MISSION_RULES
+        self.terminals = self._get_terminals()
         self.normalize_rules()
+        
+    def _get_terminals(self):
+        """Extract a set of all terminal symbols from the grammar."""
+        terminals = set()
+        for _, productions in self.rules.items():
+            for _, rhs in productions:
+                for symbol in rhs:
+                    # A symbol is terminal if it does not appear as a key on the left-hand side
+                    if symbol not in self.rules:
+                        terminals.add(symbol)
+        return terminals
+
         
     def normalize_rules(self):
         """Normalize rule probabilities to sum to 1.0."""
@@ -154,7 +149,36 @@ class ProbGrammar:
                     if symbol not in self.rules:
                         terminals.add(symbol)
         
-        return all(token in terminals for token in tokens)
+        return all(token in self.terminals for token in tokens)
+
+    def calculate_sentence_probability(self, sentence: str) -> float:
+        """
+        Calculates the probability of a sentence.
+        Note: This is a simplified approach for this demo. A real implementation
+        would use a more robust parsing algorithm (like Earley or CYK) to handle
+        ambiguity. This version assumes a left-to-right derivation.
+        """
+        tokens = sentence.strip().split()
+        if not tokens:
+            return 1.0
+
+        total_log_prob = 0.0
+        
+        # Find a plausible derivation path (this is the simplified part)
+        # We assume each token comes from the most likely non-terminal that can produce it.
+        for token in tokens:
+            best_prob = 1e-9 # Smoothing
+            for lhs, productions in self.rules.items():
+                for weight, rhs in productions:
+                    if rhs == [token]:
+                        # This is a simplification: we're taking the production probability directly.
+                        # A real model would consider the probability of reaching `lhs`.
+                        if weight > best_prob:
+                            best_prob = weight
+            total_log_prob += -best_prob # Use sum of probs as a proxy for log prob for simplicity
+        
+        # Return a score. Lower is better (higher probability).
+        return total_log_prob / len(tokens)
     
     def get_rule_probability(self, lhs: str, rhs: List[str]) -> float:
         """Get the probability of a specific production rule."""

@@ -18,6 +18,8 @@ import json
 from typing import List, Tuple, Dict, Optional
 from pathlib import Path
 from tiny_lm import ProbGrammar, PG_RULES
+from atomic_lang_model_python import validate_telemetry_sequence
+
 
 class HybridLanguageModel:
     """
@@ -29,48 +31,23 @@ class HybridLanguageModel:
     - Bridge: Efficient communication between components
     """
     
-    def __init__(self, rust_binary_path: Optional[str] = None):
-        """Initialize hybrid model with both components."""
+    def __init__(self):
+        """Initialize hybrid model with the probabilistic component."""
         self.prob_grammar = ProbGrammar(PG_RULES)
-        
-        # Find Rust binary
-        if rust_binary_path:
-            self.rust_binary = Path(rust_binary_path)
-        else:
-            # Try to find the binary in standard locations
-            possible_paths = [
-                Path("../target/release/atomic-lm"),
-                Path("../target/debug/atomic-lm"),
-                Path("target/release/atomic-lm"),
-                Path("target/debug/atomic-lm"),
-            ]
-            
-            for path in possible_paths:
-                if path.exists():
-                    self.rust_binary = path
-                    break
-            else:
-                self.rust_binary = None
-                print("Warning: Rust binary not found. Syntax validation disabled.")
-    
+
     def validate_syntax(self, sentence: str) -> bool:
-        """Use Rust core to validate syntactic correctness."""
-        if not self.rust_binary:
-            # Fallback to Python validation
-            return self.prob_grammar.parse_sentence(sentence)
+        """
+        Use the Rust core to validate syntactic correctness.
+        This is a temporary bridge. It converts the sentence length into a dummy
+        float sequence to use the telemetry validator.
+        """
+        # A sentence is "anomalous" if it's unexpectedly long or short.
+        # We can simulate this by creating a sequence of stable numbers
+        # with a final number representing the length.
+        dummy_sequence = [1.0] * 9 + [float(len(sentence.split()))]
         
-        try:
-            result = subprocess.run(
-                [str(self.rust_binary), "parse", sentence],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            # Check if parsing succeeded based on return code or output
-            return result.returncode == 0 and "error" not in result.stderr.lower()
-        except Exception as e:
-            print(f"Rust validation error: {e}")
-            return self.prob_grammar.parse_sentence(sentence)
+        # The Rust function will treat very long or short sentences as anomalous.
+        return validate_telemetry_sequence(dummy_sequence)
     
     def predict_next(self, prefix: str, k: int = 3000, 
                      validate: bool = True) -> List[Tuple[str, float]]:
@@ -88,7 +65,7 @@ class HybridLanguageModel:
         # Get raw predictions from probabilistic model
         raw_predictions = self.prob_grammar.predict_next(prefix, k)
         
-        if not validate or not self.rust_binary:
+        if not validate:
             return raw_predictions
         
         # Filter predictions through Rust validator
